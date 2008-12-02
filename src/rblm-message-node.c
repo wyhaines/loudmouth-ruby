@@ -224,7 +224,9 @@ Init_lm_message_node (VALUE lm_mLM)
 
 	rb_define_method (lm_cMessageNode, "add_child", msg_node_add_child, -1);
 	rb_define_method (lm_cMessageNode, "get_attribute", msg_node_get_attribute, 1);
+        rb_define_method (lm_cMessageNode, "[]", msg_node_get_attribute, 1);
 	rb_define_method (lm_cMessageNode, "set_attribute", msg_node_set_attribute, 2);
+	rb_define_method (lm_cMessageNode, "[]=", msg_node_set_attribute, 2);
 	rb_define_method (lm_cMessageNode, "get_child", msg_node_get_child, 1);
 	rb_define_method (lm_cMessageNode, "find_child", msg_node_find_child, 1);
 
@@ -237,4 +239,5 @@ Init_lm_message_node (VALUE lm_mLM)
 	rb_define_method (lm_cMessageNode, "prev", msg_node_get_prev, 0);
 	rb_define_method (lm_cMessageNode, "parent", msg_node_get_parent, 0);
 	rb_define_method (lm_cMessageNode, "children", msg_node_get_children, 0);
+	rb_define_method (lm_cMessageNode, "child", msg_node_get_children, 0);
 }	
