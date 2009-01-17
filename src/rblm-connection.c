@@ -3,6 +3,12 @@
 
 VALUE lm_cConnection;
 
+static VALUE Copen_block;
+static VALUE Cauth_block;
+static VALUE Cdisconnect_block;
+static VALUE Chandler_blocks;
+static VALUE Csend_blocks;
+
 VALUE conn_set_server (VALUE self, VALUE server);
 VALUE _do_send_with_reply (VALUE self, LmConnection *conn, LmMessage *msg, VALUE block);
 static LmHandlerResult
@@ -10,6 +16,12 @@ msg_handler_cb (LmMessageHandler *handler,
 		LmConnection     *connection,
 		LmMessage        *message,
 		gpointer          user_data);
+
+static LmHandlerResult
+msg_handler_for_send_cb (LmMessageHandler *handler,
+		LmConnection     *connection,
+		LmMessage        *message,
+		gpointer         *user_data);
 
 /* -- START of GMainContext hack -- 
  * This is a hack to get the GMainContext from a ruby VALUE, this will break if
@@ -52,10 +64,45 @@ conn_free (LmConnection *self)
 	lm_connection_unref (self);
 }
 
+static int
+conn_mark_each_handler(VALUE key, VALUE value)
+{
+printf("conn_mark_each_handler\n");
+	if (value != Qnil) {
+		rb_gc_mark(value);
+	}
+
+	return 0;
+}
+
+void
+conn_mark (VALUE *conn)
+{
+	VALUE block, handler_blocks, send_blocks;
+
+	block = rb_ivar_get(*conn, Copen_block);
+	if (block != Qnil) {
+		rb_gc_mark(block);
+	}
+
+	block = rb_ivar_get(*conn, Cauth_block);
+	if (block != Qnil) {
+		rb_gc_mark(block);
+	}
+
+	handler_blocks = rb_ivar_get(*conn, Chandler_blocks);
+	send_blocks = rb_ivar_get(*conn, Csend_blocks);
+	if (handler_blocks != Qnil)
+		rb_hash_foreach(handler_blocks, conn_mark_each_handler, 0);
+
+	if (send_blocks != Qnil)
+		rb_hash_foreach(send_blocks, conn_mark_each_handler, 0);
+}
+
 VALUE
 conn_allocate (VALUE klass)
 {
-	return Data_Wrap_Struct (klass, NULL, conn_free, NULL);
+	return Data_Wrap_Struct (klass, conn_mark, conn_free, NULL);
 }
 
 VALUE
@@ -64,6 +111,19 @@ conn_initialize (int argc, VALUE *argv, VALUE self)
 	LmConnection *conn;
 	char         *srv_str = NULL;
 	VALUE         server, context;
+	VALUE open_block, auth_block, disconnect_block, handler_blocks, send_blocks;
+
+	Copen_block = rb_intern("@open_block");
+	Cauth_block = rb_intern("@auth_block");
+	Cdisconnect_block = rb_intern("@disconnect_block");
+	Chandler_blocks = rb_intern("@handler_blocks");
+	Csend_blocks = rb_intern("@send_blocks");
+
+	rb_ivar_set(self,Copen_block,Qnil);
+	rb_ivar_set(self,Cauth_block,Qnil);
+	rb_ivar_set(self,Cdisconnect_block,Qnil);
+	rb_ivar_set(self,Chandler_blocks,rb_hash_new());
+	rb_ivar_set(self,Csend_blocks,rb_hash_new());
 
 	rb_scan_args (argc, argv, "02", &server, &context);
 
@@ -104,6 +164,7 @@ conn_open (int argc, VALUE *argv, VALUE self)
 		func = rb_block_proc ();
 	}
 
+	rb_ivar_set(self,Copen_block,func);
 	return GBOOL2RVAL (lm_connection_open (conn, open_callback, 
 					       (gpointer) func, NULL, NULL));
 }
@@ -134,6 +195,7 @@ conn_auth (int argc, VALUE *argv, VALUE self)
 		func = rb_block_proc ();
 	}
 
+	rb_ivar_set(self,Cauth_block,func);
 	return GBOOL2RVAL (lm_connection_authenticate (conn, 
 						       StringValuePtr (name),
 						       StringValuePtr (password), 
@@ -141,6 +203,21 @@ conn_auth (int argc, VALUE *argv, VALUE self)
 						       auth_callback,
 						       (gpointer) func, NULL,
 						       NULL));
+}
+
+VALUE
+conn_auth_and_block (int argc, VALUE *argv, VALUE self)
+{
+	LmConnection *conn = rb_lm_connection_from_ruby_object (self);
+	VALUE         name, password, resource; 
+
+	rb_scan_args (argc, argv, "21", &name, &password, &resource);
+
+	return GBOOL2RVAL (lm_connection_authenticate_and_block (conn, 
+				StringValuePtr (name),
+				StringValuePtr (password), 
+				StringValuePtr (resource),
+				NULL));
 }
 
 VALUE
@@ -297,13 +374,13 @@ conn_set_disconnect_handler (int argc, VALUE *argv, VALUE self)
 		func = rb_block_proc ();
 	}
 
+	rb_ivar_set(self,Cdisconnect_block,func);
 	lm_connection_set_disconnect_function (conn, 
 					       disconnect_cb,
 					       (gpointer) func, NULL);
 }
 
 /* TODO: Make this function check if an LmMessage or text is passed and use the proper lm_connection_send/lm_connection_send_raw function. */
-/* TODO: Check if a block is past, if so use lm_connection_send_with_reply */
 VALUE
 conn_send (int argc, VALUE *argv, VALUE self)
 {
@@ -342,8 +419,15 @@ VALUE
 _do_send_with_reply (VALUE self, LmConnection *conn, LmMessage *msg, VALUE block)
 {
 	LmMessageHandler *handler;
-	handler = lm_message_handler_new(msg_handler_cb, (gpointer) block, NULL);
+	VALUE *data;
 
+	data = malloc(2*sizeof(VALUE));
+	data[0] = block;
+	data[1] = self;
+
+	rb_hash_aset(rb_ivar_get(self,Csend_blocks),self,block);
+	
+	handler = lm_message_handler_new(msg_handler_for_send_cb, (gpointer) data, NULL);
 	lm_connection_send_with_reply(conn,msg,handler,NULL);
 
 	return Qtrue;
@@ -369,6 +453,18 @@ msg_handler_cb (LmMessageHandler *handler,
 	return LM_HANDLER_RESULT_ALLOW_MORE_HANDLERS;
 }
 
+static LmHandlerResult
+msg_handler_for_send_cb (LmMessageHandler *handler,
+		LmConnection     *connection,
+		LmMessage        *message,
+		gpointer         *user_data)
+{
+	rb_funcall ((VALUE)user_data[0], rb_intern ("call"), 1, 
+		    LMMESSAGE2RVAL (message));
+
+	return LM_HANDLER_RESULT_ALLOW_MORE_HANDLERS;
+}
+
 VALUE
 conn_add_msg_handler (int argc, VALUE *argv, VALUE self)
 {
@@ -383,6 +479,7 @@ conn_add_msg_handler (int argc, VALUE *argv, VALUE self)
 
 	handler = lm_message_handler_new (msg_handler_cb, (gpointer) func, NULL);
 
+	rb_hash_aset(rb_ivar_get(self,Chandler_blocks),type,func);
 	lm_connection_register_message_handler (conn, handler,
 						rb_lm_message_type_from_ruby_object (type),
 						LM_HANDLER_PRIORITY_NORMAL);
@@ -403,6 +500,7 @@ Init_lm_connection (VALUE lm_mLM)
 	rb_define_method (lm_cConnection, "open", conn_open, -1);
 	rb_define_method (lm_cConnection, "close", conn_close, 0);
 	rb_define_method (lm_cConnection, "authenticate", conn_auth, -1);
+	rb_define_method (lm_cConnection, "authenticate_and_block", conn_auth_and_block, -1);
 	rb_define_method (lm_cConnection, "keep_alive_rate=", conn_set_keep_alive_rate, 1);
 	/* rb_define_method (lm_cConnection, "keep_alive_rate", conn_get_keep_alive_rate, 0); */
 	rb_define_method (lm_cConnection, "open?", conn_is_open, 0);
