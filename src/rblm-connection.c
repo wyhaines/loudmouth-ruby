@@ -64,45 +64,10 @@ conn_free (LmConnection *self)
 	lm_connection_unref (self);
 }
 
-static int
-conn_mark_each_handler(VALUE key, VALUE value)
-{
-printf("conn_mark_each_handler\n");
-	if (value != Qnil) {
-		rb_gc_mark(value);
-	}
-
-	return 0;
-}
-
-void
-conn_mark (VALUE *conn)
-{
-	VALUE block, handler_blocks, send_blocks;
-
-	block = rb_ivar_get(*conn, Copen_block);
-	if (block != Qnil) {
-		rb_gc_mark(block);
-	}
-
-	block = rb_ivar_get(*conn, Cauth_block);
-	if (block != Qnil) {
-		rb_gc_mark(block);
-	}
-
-	handler_blocks = rb_ivar_get(*conn, Chandler_blocks);
-	send_blocks = rb_ivar_get(*conn, Csend_blocks);
-	if (handler_blocks != Qnil)
-		rb_hash_foreach(handler_blocks, conn_mark_each_handler, 0);
-
-	if (send_blocks != Qnil)
-		rb_hash_foreach(send_blocks, conn_mark_each_handler, 0);
-}
-
 VALUE
 conn_allocate (VALUE klass)
 {
-	return Data_Wrap_Struct (klass, conn_mark, conn_free, NULL);
+	return Data_Wrap_Struct (klass, NULL, conn_free, NULL);
 }
 
 VALUE
@@ -113,12 +78,18 @@ conn_initialize (int argc, VALUE *argv, VALUE self)
 	VALUE         server, context;
 	VALUE open_block, auth_block, disconnect_block, handler_blocks, send_blocks;
 
+  /* Initialize some static VALUE's which will point at stuff that will be
+	  accessed repeatedly. */
+	
 	Copen_block = rb_intern("@open_block");
 	Cauth_block = rb_intern("@auth_block");
 	Cdisconnect_block = rb_intern("@disconnect_block");
 	Chandler_blocks = rb_intern("@handler_blocks");
 	Csend_blocks = rb_intern("@send_blocks");
 
+  /* These data structures will track the blocks that are in use so that they
+	  don't get prematurey garbage collected. */
+	
 	rb_ivar_set(self,Copen_block,Qnil);
 	rb_ivar_set(self,Cauth_block,Qnil);
 	rb_ivar_set(self,Cdisconnect_block,Qnil);
@@ -161,6 +132,7 @@ conn_open (int argc, VALUE *argv, VALUE self)
 
 	rb_scan_args (argc, argv, "0&", &func);
 	if (NIL_P (func)) {
+		/* TODO: This is broken; it doesn't do what I think it was thought that it does. */
 		func = rb_block_proc ();
 	}
 
@@ -192,6 +164,7 @@ conn_auth (int argc, VALUE *argv, VALUE self)
 
 	rb_scan_args (argc, argv, "21&", &name, &password, &resource, &func);
 	if (NIL_P (func)) {
+		/* TODO: This is broken; it doesn't do what I think it was thought that it does. */
 		func = rb_block_proc ();
 	}
 
@@ -371,6 +344,7 @@ conn_set_disconnect_handler (int argc, VALUE *argv, VALUE self)
 
 	rb_scan_args (argc, argv, "0&", &func);
 	if (NIL_P (func)) {
+		/* TODO: This is broken; it doesn't do what I think it was thought that it does. */
 		func = rb_block_proc ();
 	}
 
@@ -409,6 +383,7 @@ conn_send_with_reply (int argc, VALUE *argv, VALUE self)
 	LmMessage    *m = rb_lm_message_from_ruby_object (msg);
 
 	if (NIL_P (block)) {
+		/* TODO: This is broken; it doesn't do what I think it was thought that it does. */
 		block = rb_block_proc ();
 	}
 
@@ -474,6 +449,7 @@ conn_add_msg_handler (int argc, VALUE *argv, VALUE self)
 
 	rb_scan_args (argc, argv, "1&", &type, &func);
 	if (NIL_P (func)) {
+		/* TODO: This is broken; it doesn't do what I think it was thought that it does. */
 		func = rb_block_proc ();
 	}
 
